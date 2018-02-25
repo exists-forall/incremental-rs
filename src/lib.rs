@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::cmp::Ordering;
 
 /// A value which can be "incrementally" re-computed as its inputs change.
 ///
@@ -151,6 +152,7 @@ impl<T> Deref for CountEvaluations<T> {
 /// assert_eq!(squ.output, 9);
 /// assert_eq!(squ.num_evaluations, 3); // always recomputes, even for identical inputs
 /// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Raw<Output> {
     pub output: Output,
 }
@@ -232,6 +234,7 @@ impl<Output, Source: ShallowEval<Output = Output>> Inc<Source> for Raw<Output> {
 /// assert_eq!(squ.output, 4);
 /// assert_eq!(squ.num_evaluations, 3); // does not remember anything except the previous input
 /// ```
+#[derive(Clone, Copy, Debug)]
 pub struct Cache<Source, Output> {
     source: Source,
     output: Output,
@@ -258,5 +261,69 @@ impl<Source: Clone + PartialEq, Output: Inc<Source>> Inc<Source> for Cache<Sourc
             self.source = source.clone();
             self.output.re_eval(source);
         }
+    }
+}
+
+impl<Source, Output: PartialEq> PartialEq for Cache<Source, Output> {
+    /// Equality on `Cache`s compares only their outputs, not their cached inputs, because their
+    /// cached inputs should have no semantically observable effects.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use incremental::{Inc, ShallowEval, Raw, Cache};
+    ///
+    /// #[derive(Clone, PartialEq, Debug)]
+    /// struct SquareOp(i32);
+    ///
+    /// impl ShallowEval for SquareOp {
+    ///     type Output = i32;
+    ///
+    ///     fn shallow_eval(self) -> i32 {
+    ///         let SquareOp(x) = self;
+    ///         x * x
+    ///     }
+    /// }
+    ///
+    /// let mut squ1: Cache<SquareOp, Raw<i32>> = Inc::fresh_eval(SquareOp(2));
+    /// let mut squ2: Cache<SquareOp, Raw<i32>> = Inc::fresh_eval(SquareOp(-2));
+    /// assert_eq!(squ1.output, 4);
+    /// assert_eq!(squ2.output, 4);
+    /// assert_eq!(squ1, squ2);
+    /// ```
+    fn eq(&self, other: &Self) -> bool {
+        self.output == other.output
+    }
+}
+
+impl<Source, Output: Eq> Eq for Cache<Source, Output> {}
+
+impl<Source, Output: PartialOrd> PartialOrd for Cache<Source, Output> {
+    /// Ordering on `Cache`s compares only their outputs, not their cached inputs, because their
+    /// cached inputs have no semantically observable effects.
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.output.partial_cmp(&other.output)
+    }
+
+    fn lt(&self, other: &Self) -> bool {
+        self.output < other.output
+    }
+
+    fn le(&self, other: &Self) -> bool {
+        self.output <= other.output
+    }
+
+    fn gt(&self, other: &Self) -> bool {
+        self.output > other.output
+    }
+
+    fn ge(&self, other: &Self) -> bool {
+        self.output >= other.output
+    }
+}
+
+impl<Source, Output: Ord> Ord for Cache<Source, Output> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.output.cmp(&other.output)
     }
 }
