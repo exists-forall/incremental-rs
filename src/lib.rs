@@ -1,0 +1,276 @@
+use std::ops::Deref;
+
+/// A value which can be "incrementally" re-computed as its inputs change.
+///
+/// A type implementing `Inc` represents a result that can be evaluated from a `Source` type, and
+/// which can be evaluated *more efficiently* if the result of a previous evaluation on a similar
+/// input is available.  Because this incremental re-evaluation feature exists purely for
+/// performance purposes, its use should not affect the semantics of the evaluation.
+pub trait Inc {
+    /// The type of inputs from which values of this type can be computed.
+    type Source;
+
+    /// Evaluate a given input.
+    ///
+    /// This method computes its result "from scratch," without considering any previous input,
+    /// so it may be less efficient than `re_eval`.
+    fn fresh_eval(source: Self::Source) -> Self;
+
+    /// Evaluate a given input incrementally, reusing the result of a previous evaluation.
+    ///
+    /// This method may be more efficient than `fresh_eval` when the previous result was generated
+    /// from an input similar to the current input.
+    ///
+    /// # Implementation notes
+    ///
+    /// `re_eval` should always return exactly the same result as `fresh_eval` for a given input.
+    /// This means that if `result` is of type `T: Inc`, the following equality must always hold:
+    ///
+    /// ```ignore
+    /// result.re_eval(source) == T::fresh_eval(source)
+    /// ```
+    fn re_eval(self, source: Self::Source) -> Self;
+}
+
+/// A value which can be evaluated to a result which may contain un-evaluated parts.
+///
+/// The exact meaning of "un-evaluated" here is subjective, but roughly speaking it means that parts
+/// of the output may be suitable for use as inputs to further evaluations.  For example, a
+/// numerical expression tree which supports shallow evaluation may evaluate to a simpler numerical
+/// expression tree, so that `5^2` may evaluate to `5 * 5`, but not complete the full evaluation to
+/// `25`.
+///
+/// This type is useful for *incremental* evaluation, because it allows us to recognize when two
+/// inputs produce overlapping sub-computations, even when the inputs are not identical.  If the
+/// inputs did not support shallow evaluation, their internal computation steps would be opaque, and
+/// it would be impossible to tell if they overlapped or not.  Shallow evaluation allows the
+/// internal steps of an evaluation to be visible, which in turns makes them optimizable.
+pub trait ShallowEval {
+    /// A partially-evaluated result, which may contain conceptually "un-evaluated" parts.
+    type Output;
+
+    /// Evaluate this input, producing an output which may contain conceptually "un-evaluated" parts.
+    fn shallow_eval(self) -> Self::Output;
+}
+
+/// A wrapper type for testing and debugging evaluation strategies, which increments a counter
+/// every time it is evaluated.
+pub struct CountEvaluations<T> {
+    pub num_evaluations: u32,
+    pub content: T,
+}
+
+impl<T: Inc> Inc for CountEvaluations<T> {
+    type Source = T::Source;
+
+    fn fresh_eval(source: Self::Source) -> Self {
+        CountEvaluations {
+            num_evaluations: 1,
+            content: T::fresh_eval(source),
+        }
+    }
+
+    fn re_eval(self, source: Self::Source) -> Self {
+        CountEvaluations {
+            num_evaluations: self.num_evaluations + 1,
+            content: self.content.re_eval(source),
+        }
+    }
+}
+
+impl<T> Deref for CountEvaluations<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+
+/// A value computed from a `Source` type with the simplest possible evaluation strategy: *always
+/// recompute from scratch.*
+///
+/// This type is intended to be wrapped in types like `Cache` which implement smarter incremental
+/// evaluation strategies.  Even though a `Raw` value will always recompute from scratch, wrapper
+/// types like `Cache` may intelligently preempt that computation before it ever happens.
+///
+/// Abstractly, `Raw` types are meant to represent the "leaves" or "atoms" of incremental evaluation
+/// trees; they are results so small that they should not (or cannot) support intelligent caching or
+/// diffing of their sub-components.  This is why `Raw` stores the direct result of "shallowly"
+/// evaluating an input: `Raw` is used for units of computation so small that "shallow" evaluation
+/// becomes the same as ordinary, full evaluation.
+///
+///
+/// # Examples
+///
+/// Basic usage:
+///
+/// ```
+/// use incremental::{Inc, ShallowEval, Raw};
+///
+/// struct SquareOp(i32);
+///
+/// impl ShallowEval for SquareOp {
+///     type Output = i32;
+///
+///     fn shallow_eval(self) -> i32 {
+///         let SquareOp(x) = self;
+///         x * x
+///     }
+/// }
+///
+/// let mut squ = Raw::<SquareOp>::fresh_eval(SquareOp(2));
+/// assert_eq!(squ.output, 4);
+///
+/// squ = squ.re_eval(SquareOp(3));
+/// assert_eq!(squ.output, 9);
+/// ```
+///
+/// `Raw` always recomputes, even for identical inputs:
+///
+/// ```
+/// #   use incremental::{Inc, ShallowEval, Raw};
+/// #
+/// #   struct SquareOp(i32);
+/// #
+/// #   impl ShallowEval for SquareOp {
+/// #       type Output = i32;
+/// #
+/// #       fn shallow_eval(self) -> i32 {
+/// #           let SquareOp(x) = self;
+/// #           x * x
+/// #       }
+/// #   }
+/// use incremental::CountEvaluations;
+///
+/// let mut squ = CountEvaluations::<Raw<SquareOp>>::fresh_eval(SquareOp(2));
+/// assert_eq!(squ.output, 4);
+/// assert_eq!(squ.num_evaluations, 1);
+///
+/// squ = squ.re_eval(SquareOp(3));
+/// assert_eq!(squ.output, 9);
+/// assert_eq!(squ.num_evaluations, 2);
+///
+/// squ = squ.re_eval(SquareOp(3));
+/// assert_eq!(squ.output, 9);
+/// assert_eq!(squ.num_evaluations, 3); // always recomputes, even for identical inputs
+/// ```
+pub struct Raw<Source: ShallowEval> {
+    pub output: Source::Output,
+}
+
+impl<Source: ShallowEval> Inc for Raw<Source> {
+    type Source = Source;
+
+    fn fresh_eval(source: Self::Source) -> Self {
+        Raw { output: source.shallow_eval() }
+    }
+
+    fn re_eval(self, source: Self::Source) -> Self {
+        Raw { output: source.shallow_eval() }
+    }
+}
+
+/// A value which avoids recomputing itself for identical consecutive inputs.
+///
+/// If two consecutive inputs are not exactly equal, this type will recompute itself using its
+/// contents' evaluation strategy.
+///
+/// You can use this type to introduce caching logic at any level of a structure of nested
+/// incrementally computable values.
+///
+/// # Examples:
+///
+/// Basic usage:
+///
+/// ```
+/// use incremental::{Inc, ShallowEval, Raw, Cache};
+///
+/// #[derive(Clone, PartialEq)]
+/// struct SquareOp(i32);
+///
+/// impl ShallowEval for SquareOp {
+///     type Output = i32;
+///
+///     fn shallow_eval(self) -> i32 {
+///         let SquareOp(x) = self;
+///         x * x
+///     }
+/// }
+///
+/// let mut squ = Cache::<Raw<SquareOp>>::fresh_eval(SquareOp(2));
+/// assert_eq!(squ.output, 4);
+///
+/// squ = squ.re_eval(SquareOp(5));
+/// assert_eq!(squ.output, 25);
+/// ```
+///
+/// `Cache` avoids recomputing itself when evaluated with identical consecutive inputs:
+///
+/// ```
+/// #   use incremental::{Inc, ShallowEval, Raw, Cache};
+/// #   #[derive(Clone, PartialEq)]
+/// #   struct SquareOp(i32);
+/// #
+/// #   impl ShallowEval for SquareOp {
+/// #       type Output = i32;
+/// #
+/// #       fn shallow_eval(self) -> i32 {
+/// #           let SquareOp(x) = self;
+/// #           x * x
+/// #       }
+/// #   }
+/// use incremental::CountEvaluations;
+///
+/// let mut squ = Cache::<CountEvaluations<Raw<SquareOp>>>::fresh_eval(SquareOp(2));
+/// assert_eq!(squ.output, 4);
+/// assert_eq!(squ.num_evaluations, 1);
+///
+/// squ = squ.re_eval(SquareOp(5));
+/// assert_eq!(squ.output, 25);
+/// assert_eq!(squ.num_evaluations, 2);
+///
+/// squ = squ.re_eval(SquareOp(5));
+/// assert_eq!(squ.output, 25);
+/// assert_eq!(squ.num_evaluations, 2); // does not recompute for identical inputs
+///
+/// squ = squ.re_eval(SquareOp(2));
+/// assert_eq!(squ.output, 4);
+/// assert_eq!(squ.num_evaluations, 3); // does not remember anything except the previous input
+/// ```
+pub struct Cache<T: Inc> {
+    source: T::Source,
+    output: T,
+}
+
+impl<T: Inc> Deref for Cache<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.output
+    }
+}
+
+impl<T: Inc> Inc for Cache<T>
+where
+    T::Source: Clone + PartialEq,
+{
+    type Source = T::Source;
+
+    fn fresh_eval(source: Self::Source) -> Self {
+        Cache {
+            source: source.clone(),
+            output: T::fresh_eval(source),
+        }
+    }
+
+    fn re_eval(self, source: Self::Source) -> Self {
+        if self.source == source {
+            self
+        } else {
+            Cache {
+                source: source.clone(),
+                output: self.output.re_eval(source),
+            }
+        }
+    }
+}
