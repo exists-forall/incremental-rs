@@ -20,13 +20,18 @@ pub trait Inc<Source> {
     ///
     /// # Implementation notes
     ///
-    /// `re_eval` should always return exactly the same result as `fresh_eval` for a given input.
-    /// This means that if `result` is of type `T: Inc`, the following equality must always hold:
+    /// `re_eval` should always set `self` to exactly the same value as `fresh_eval` would produce
+    /// for a given input. In other words, the following two statements should always be
+    /// semantically equivalent:
     ///
     /// ```ignore
-    /// result.re_eval(source) == T::fresh_eval(source)
+    /// output.re_eval(source);
     /// ```
-    fn re_eval(self, source: Source) -> Self;
+    ///
+    /// ```ignore
+    /// *output = Inc::fresh_eval(source);
+    /// ```
+    fn re_eval(&mut self, source: Source);
 }
 
 /// A value which can be evaluated to a result which may contain un-evaluated parts.
@@ -65,11 +70,9 @@ impl<Source, T: Inc<Source>> Inc<Source> for CountEvaluations<T> {
         }
     }
 
-    fn re_eval(self, source: Source) -> Self {
-        CountEvaluations {
-            num_evaluations: self.num_evaluations + 1,
-            content: self.content.re_eval(source),
-        }
+    fn re_eval(&mut self, source: Source) {
+        self.num_evaluations += 1;
+        self.content.re_eval(source);
     }
 }
 
@@ -115,7 +118,7 @@ impl<T> Deref for CountEvaluations<T> {
 /// let mut squ: Raw<i32> = Inc::fresh_eval(SquareOp(2));
 /// assert_eq!(squ.output, 4);
 ///
-/// squ = squ.re_eval(SquareOp(3));
+/// squ.re_eval(SquareOp(3));
 /// assert_eq!(squ.output, 9);
 /// ```
 ///
@@ -140,11 +143,11 @@ impl<T> Deref for CountEvaluations<T> {
 /// assert_eq!(squ.output, 4);
 /// assert_eq!(squ.num_evaluations, 1);
 ///
-/// squ = squ.re_eval(SquareOp(3));
+/// squ.re_eval(SquareOp(3));
 /// assert_eq!(squ.output, 9);
 /// assert_eq!(squ.num_evaluations, 2);
 ///
-/// squ = squ.re_eval(SquareOp(3));
+/// squ.re_eval(SquareOp(3));
 /// assert_eq!(squ.output, 9);
 /// assert_eq!(squ.num_evaluations, 3); // always recomputes, even for identical inputs
 /// ```
@@ -157,8 +160,8 @@ impl<Output, Source: ShallowEval<Output = Output>> Inc<Source> for Raw<Output> {
         Raw { output: source.shallow_eval() }
     }
 
-    fn re_eval(self, source: Source) -> Self {
-        Raw { output: source.shallow_eval() }
+    fn re_eval(&mut self, source: Source) {
+        self.output = source.shallow_eval();
     }
 }
 
@@ -192,7 +195,7 @@ impl<Output, Source: ShallowEval<Output = Output>> Inc<Source> for Raw<Output> {
 /// let mut squ: Cache<SquareOp, Raw<i32>> = Inc::fresh_eval(SquareOp(2));
 /// assert_eq!(squ.output, 4);
 ///
-/// squ = squ.re_eval(SquareOp(5));
+/// squ.re_eval(SquareOp(5));
 /// assert_eq!(squ.output, 25);
 /// ```
 ///
@@ -217,15 +220,15 @@ impl<Output, Source: ShallowEval<Output = Output>> Inc<Source> for Raw<Output> {
 /// assert_eq!(squ.output, 4);
 /// assert_eq!(squ.num_evaluations, 1);
 ///
-/// squ = squ.re_eval(SquareOp(5));
+/// squ.re_eval(SquareOp(5));
 /// assert_eq!(squ.output, 25);
 /// assert_eq!(squ.num_evaluations, 2);
 ///
-/// squ = squ.re_eval(SquareOp(5));
+/// squ.re_eval(SquareOp(5));
 /// assert_eq!(squ.output, 25);
 /// assert_eq!(squ.num_evaluations, 2); // does not recompute for identical inputs
 ///
-/// squ = squ.re_eval(SquareOp(2));
+/// squ.re_eval(SquareOp(2));
 /// assert_eq!(squ.output, 4);
 /// assert_eq!(squ.num_evaluations, 3); // does not remember anything except the previous input
 /// ```
@@ -250,14 +253,10 @@ impl<Source: Clone + PartialEq, Output: Inc<Source>> Inc<Source> for Cache<Sourc
         }
     }
 
-    fn re_eval(self, source: Source) -> Self {
-        if self.source == source {
-            self
-        } else {
-            Cache {
-                source: source.clone(),
-                output: self.output.re_eval(source),
-            }
+    fn re_eval(&mut self, source: Source) {
+        if self.source != source {
+            self.source = source.clone();
+            self.output.re_eval(source);
         }
     }
 }
