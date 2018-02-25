@@ -6,15 +6,12 @@ use std::ops::Deref;
 /// which can be evaluated *more efficiently* if the result of a previous evaluation on a similar
 /// input is available.  Because this incremental re-evaluation feature exists purely for
 /// performance purposes, its use should not affect the semantics of the evaluation.
-pub trait Inc {
-    /// The type of inputs from which values of this type can be computed.
-    type Source;
-
+pub trait Inc<Source> {
     /// Evaluate a given input.
     ///
     /// This method computes its result "from scratch," without considering any previous input,
     /// so it may be less efficient than `re_eval`.
-    fn fresh_eval(source: Self::Source) -> Self;
+    fn fresh_eval(source: Source) -> Self;
 
     /// Evaluate a given input incrementally, reusing the result of a previous evaluation.
     ///
@@ -29,7 +26,7 @@ pub trait Inc {
     /// ```ignore
     /// result.re_eval(source) == T::fresh_eval(source)
     /// ```
-    fn re_eval(self, source: Self::Source) -> Self;
+    fn re_eval(self, source: Source) -> Self;
 }
 
 /// A value which can be evaluated to a result which may contain un-evaluated parts.
@@ -60,17 +57,15 @@ pub struct CountEvaluations<T> {
     pub content: T,
 }
 
-impl<T: Inc> Inc for CountEvaluations<T> {
-    type Source = T::Source;
-
-    fn fresh_eval(source: Self::Source) -> Self {
+impl<Source, T: Inc<Source>> Inc<Source> for CountEvaluations<T> {
+    fn fresh_eval(source: Source) -> Self {
         CountEvaluations {
             num_evaluations: 1,
             content: T::fresh_eval(source),
         }
     }
 
-    fn re_eval(self, source: Self::Source) -> Self {
+    fn re_eval(self, source: Source) -> Self {
         CountEvaluations {
             num_evaluations: self.num_evaluations + 1,
             content: self.content.re_eval(source),
@@ -86,8 +81,7 @@ impl<T> Deref for CountEvaluations<T> {
     }
 }
 
-/// A value computed from a `Source` type with the simplest possible evaluation strategy: *always
-/// recompute from scratch.*
+/// A value with the simplest possible evaluation strategy: *always recompute from scratch.*
 ///
 /// This type is intended to be wrapped in types like `Cache` which implement smarter incremental
 /// evaluation strategies.  Even though a `Raw` value will always recompute from scratch, wrapper
@@ -118,7 +112,7 @@ impl<T> Deref for CountEvaluations<T> {
 ///     }
 /// }
 ///
-/// let mut squ = Raw::<SquareOp>::fresh_eval(SquareOp(2));
+/// let mut squ: Raw<i32> = Inc::fresh_eval(SquareOp(2));
 /// assert_eq!(squ.output, 4);
 ///
 /// squ = squ.re_eval(SquareOp(3));
@@ -142,7 +136,7 @@ impl<T> Deref for CountEvaluations<T> {
 /// #   }
 /// use incremental::CountEvaluations;
 ///
-/// let mut squ = CountEvaluations::<Raw<SquareOp>>::fresh_eval(SquareOp(2));
+/// let mut squ: CountEvaluations<Raw<i32>> = Inc::fresh_eval(SquareOp(2));
 /// assert_eq!(squ.output, 4);
 /// assert_eq!(squ.num_evaluations, 1);
 ///
@@ -154,18 +148,16 @@ impl<T> Deref for CountEvaluations<T> {
 /// assert_eq!(squ.output, 9);
 /// assert_eq!(squ.num_evaluations, 3); // always recomputes, even for identical inputs
 /// ```
-pub struct Raw<Source: ShallowEval> {
-    pub output: Source::Output,
+pub struct Raw<Output> {
+    pub output: Output,
 }
 
-impl<Source: ShallowEval> Inc for Raw<Source> {
-    type Source = Source;
-
-    fn fresh_eval(source: Self::Source) -> Self {
+impl<Output, Source: ShallowEval<Output = Output>> Inc<Source> for Raw<Output> {
+    fn fresh_eval(source: Source) -> Self {
         Raw { output: source.shallow_eval() }
     }
 
-    fn re_eval(self, source: Self::Source) -> Self {
+    fn re_eval(self, source: Source) -> Self {
         Raw { output: source.shallow_eval() }
     }
 }
@@ -197,7 +189,7 @@ impl<Source: ShallowEval> Inc for Raw<Source> {
 ///     }
 /// }
 ///
-/// let mut squ = Cache::<Raw<SquareOp>>::fresh_eval(SquareOp(2));
+/// let mut squ: Cache<SquareOp, Raw<i32>> = Inc::fresh_eval(SquareOp(2));
 /// assert_eq!(squ.output, 4);
 ///
 /// squ = squ.re_eval(SquareOp(5));
@@ -221,7 +213,7 @@ impl<Source: ShallowEval> Inc for Raw<Source> {
 /// #   }
 /// use incremental::CountEvaluations;
 ///
-/// let mut squ = Cache::<CountEvaluations<Raw<SquareOp>>>::fresh_eval(SquareOp(2));
+/// let mut squ: Cache<SquareOp, CountEvaluations<Raw<i32>>> = Inc::fresh_eval(SquareOp(2));
 /// assert_eq!(squ.output, 4);
 /// assert_eq!(squ.num_evaluations, 1);
 ///
@@ -237,33 +229,28 @@ impl<Source: ShallowEval> Inc for Raw<Source> {
 /// assert_eq!(squ.output, 4);
 /// assert_eq!(squ.num_evaluations, 3); // does not remember anything except the previous input
 /// ```
-pub struct Cache<T: Inc> {
-    source: T::Source,
-    output: T,
+pub struct Cache<Source, Output> {
+    source: Source,
+    output: Output,
 }
 
-impl<T: Inc> Deref for Cache<T> {
-    type Target = T;
+impl<Source, Output> Deref for Cache<Source, Output> {
+    type Target = Output;
 
     fn deref(&self) -> &Self::Target {
         &self.output
     }
 }
 
-impl<T: Inc> Inc for Cache<T>
-where
-    T::Source: Clone + PartialEq,
-{
-    type Source = T::Source;
-
-    fn fresh_eval(source: Self::Source) -> Self {
+impl<Source: Clone + PartialEq, Output: Inc<Source>> Inc<Source> for Cache<Source, Output> {
+    fn fresh_eval(source: Source) -> Self {
         Cache {
             source: source.clone(),
-            output: T::fresh_eval(source),
+            output: Output::fresh_eval(source),
         }
     }
 
-    fn re_eval(self, source: Self::Source) -> Self {
+    fn re_eval(self, source: Source) -> Self {
         if self.source == source {
             self
         } else {
