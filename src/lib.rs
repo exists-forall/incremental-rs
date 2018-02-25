@@ -1,4 +1,4 @@
-pub mod tuple;
+mod tuple;
 
 use std::ops::Deref;
 use std::cmp::Ordering;
