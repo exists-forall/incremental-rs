@@ -1,3 +1,5 @@
+pub mod tuple;
+
 use std::ops::Deref;
 use std::cmp::Ordering;
 
@@ -325,73 +327,5 @@ impl<Source, Output: PartialOrd> PartialOrd for Cache<Source, Output> {
 impl<Source, Output: Ord> Ord for Cache<Source, Output> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.output.cmp(&other.output)
-    }
-}
-
-/// Incremental evaluation of tuples, from sources which can be shallowly evaluated into two
-/// sources, one for each component.
-///
-/// # Examples
-///
-/// Basic usage:
-///
-/// ```
-/// use incremental::{Inc, Raw, ShallowEval};
-///
-/// struct PowsOp(i32);
-/// struct SquareOp(i32);
-/// struct CubeOp(i32);
-///
-/// impl ShallowEval for PowsOp {
-///     type Output = (SquareOp, CubeOp);
-///
-///     fn shallow_eval(self) -> Self::Output {
-///         let PowsOp(x) = self;
-///         (SquareOp(x), CubeOp(x))
-///     }
-/// }
-///
-/// impl ShallowEval for SquareOp {
-///     type Output = i32;
-///
-///     fn shallow_eval(self) -> Self::Output {
-///         let SquareOp(x) = self;
-///         x * x
-///     }
-/// }
-///
-/// impl ShallowEval for CubeOp {
-///     type Output = i32;
-///
-///     fn shallow_eval(self) -> Self::Output {
-///         let CubeOp(x) = self;
-///         x * x * x
-///     }
-/// }
-///
-/// let mut pows: (Raw<i32>, Raw<i32>) = Inc::fresh_eval(PowsOp(2));
-/// assert_eq!(pows.0.output, 4);
-/// assert_eq!(pows.1.output, 8);
-///
-/// pows.re_eval(PowsOp(5));
-/// assert_eq!(pows.0.output, 25);
-/// assert_eq!(pows.1.output, 125);
-/// ```
-impl<
-    ASource,
-    BSource,
-    Source: ShallowEval<Output = (ASource, BSource)>,
-    A: Inc<ASource>,
-    B: Inc<BSource>,
-> Inc<Source> for (A, B) {
-    fn fresh_eval(source: Source) -> Self {
-        let (a_source, b_source) = source.shallow_eval();
-        (A::fresh_eval(a_source), B::fresh_eval(b_source))
-    }
-
-    fn re_eval(&mut self, source: Source) {
-        let (a_source, b_source) = source.shallow_eval();
-        self.0.re_eval(a_source);
-        self.1.re_eval(b_source);
     }
 }
