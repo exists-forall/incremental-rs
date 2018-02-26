@@ -1,7 +1,7 @@
 mod tuple;
 mod foreign;
 
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::cmp::Ordering;
 
 /// A value which can be "incrementally" re-computed as its inputs change.
@@ -171,6 +171,51 @@ impl<Output, Source: ShallowEval<Output = Output>> Inc<Source> for Raw<Output> {
     }
 }
 
+/// A pre-evaluated source supporting "shallow evaluation" to whatever value it stores.
+///
+/// # Examples
+///
+/// Basic usage:
+///
+/// ```
+/// use incremental::{Inc, RawSource, Raw};
+///
+/// let mut val: Raw<i32> = Inc::fresh_eval(RawSource::new(42));
+/// assert_eq!(val.output, 42);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RawSource<Source> {
+    pub source: Source,
+}
+
+impl<Source> RawSource<Source> {
+    pub fn new(source: Source) -> Self {
+        RawSource { source }
+    }
+}
+
+impl<Source> Deref for RawSource<Source> {
+    type Target = Source;
+
+    fn deref(&self) -> &Self::Target {
+        &self.source
+    }
+}
+
+impl<Source> DerefMut for RawSource<Source> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.source
+    }
+}
+
+impl<Source> ShallowEval for RawSource<Source> {
+    type Output = Source;
+
+    fn shallow_eval(self) -> Self::Output {
+        self.source
+    }
+}
+
 /// A value which avoids recomputing itself for identical consecutive inputs.
 ///
 /// If two consecutive inputs are not exactly equal, this type will recompute itself using its
@@ -329,5 +374,104 @@ impl<Source, Output: PartialOrd> PartialOrd for Cache<Source, Output> {
 impl<Source, Output: Ord> Ord for Cache<Source, Output> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.output.cmp(&other.output)
+    }
+}
+
+const ZIP_VEC_SHRINK_RATIO: usize = 4;
+
+/// A vector of values whose evaluation strategy associates old elements with new elements according
+/// to their positions in the vector.
+///
+/// The word "zip" is meant to suggest that this strategy "zips" the old vector together with the
+/// set of new sources and re-evaluates each old element using the corresponding new source in the
+/// same position.  This strategy is therefore most efficient when elements in the same positions
+/// tend to be similar across evaluations.
+///
+/// # Examples
+///
+/// Basic usage:
+///
+/// ```
+/// use std::ops::Range;
+/// use incremental::{Inc, ShallowEval, Raw, RawSource, ZipVec};
+///
+/// struct SquareOp(i32);
+///
+/// impl ShallowEval for SquareOp {
+///     type Output = i32;
+///
+///     fn shallow_eval(self) -> Self::Output {
+///         let SquareOp(x) = self;
+///         x * x
+///     }
+/// }
+///
+/// let mut squares: ZipVec<Raw<i32>> = Inc::fresh_eval(RawSource::new((1..4).map(SquareOp)));
+/// assert_eq!(squares.len(), 3);
+/// assert_eq!(squares[0].output, 1);
+/// assert_eq!(squares[1].output, 4);
+/// assert_eq!(squares[2].output, 9);
+///
+/// squares.re_eval(RawSource::new((1..6).map(SquareOp)));
+/// assert_eq!(squares.len(), 5);
+/// assert_eq!(squares[0].output, 1);
+/// assert_eq!(squares[1].output, 4);
+/// assert_eq!(squares[2].output, 9);
+/// assert_eq!(squares[3].output, 16);
+/// assert_eq!(squares[4].output, 25);
+///
+/// squares.re_eval(RawSource::new((2..5).map(SquareOp)));
+/// assert_eq!(squares.len(), 3);
+/// assert_eq!(squares[0].output, 4);
+/// assert_eq!(squares[1].output, 9);
+/// assert_eq!(squares[2].output, 16);
+/// ```
+pub struct ZipVec<Output> {
+    pub outputs: Vec<Output>,
+}
+
+impl<Output> Deref for ZipVec<Output> {
+    type Target = Vec<Output>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.outputs
+    }
+}
+
+impl<
+    InnerSource,
+    I: IntoIterator<Item = InnerSource>,
+    Source: ShallowEval<Output = I>,
+    Output: Inc<InnerSource>,
+> Inc<Source> for ZipVec<Output> {
+    fn fresh_eval(source: Source) -> Self {
+        ZipVec {
+            outputs: source
+                .shallow_eval()
+                .into_iter()
+                .map(Output::fresh_eval)
+                .collect(),
+        }
+    }
+
+    fn re_eval(&mut self, source: Source) {
+        let mut inners = source.shallow_eval().into_iter().fuse();
+        let mut count = 0;
+        for output in &mut self.outputs {
+            if let Some(inner) = inners.next() {
+                count += 1;
+                output.re_eval(inner);
+            } else {
+                break;
+            }
+        }
+        for remaining_inner in inners {
+            self.outputs.push(Output::fresh_eval(remaining_inner));
+            count += 1;
+        }
+        self.outputs.truncate(count);
+        if self.outputs.len() < self.outputs.capacity() / ZIP_VEC_SHRINK_RATIO {
+            self.outputs.shrink_to_fit();
+        }
     }
 }
