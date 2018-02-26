@@ -80,3 +80,13 @@ fn test_option() {
     three_halves.re_eval(ThreeHalvesPower(9.0));
     assert_eq!(three_halves.unwrap().deref().output, 27.0);
 }
+
+impl<Source, Output: Inc<Source>> Inc<Source> for Box<Output> {
+    fn fresh_eval(source: Source) -> Self {
+        Box::new(Output::fresh_eval(source))
+    }
+
+    fn re_eval(&mut self, source: Source) {
+        (**self).re_eval(source)
+    }
+}
