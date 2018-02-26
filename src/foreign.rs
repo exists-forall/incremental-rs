@@ -1,7 +1,5 @@
 ///! `Inc` implementations for common foreign types
 
-use std::ops::Deref;
-
 use super::{Inc, ShallowEval};
 
 impl<
@@ -34,6 +32,7 @@ impl<
 
 #[test]
 fn test_option() {
+    use std::ops::Deref;
     use super::{Raw, Cache, CountEvaluations};
 
     #[derive(PartialEq, Clone, Copy, Debug)]
@@ -64,20 +63,20 @@ fn test_option() {
 
     let mut three_halves: Option<Cache<Cube, CountEvaluations<Raw<f64>>>> =
         Inc::fresh_eval(ThreeHalvesPower(4.0));
-    assert_eq!(three_halves.unwrap().deref().output as f64, 8.0);
+    assert_eq!(three_halves.unwrap().deref().output, 8.0);
     assert_eq!(three_halves.unwrap().num_evaluations, 1);
 
     three_halves.re_eval(ThreeHalvesPower(4.0));
-    assert_eq!(three_halves.unwrap().deref().output as f64, 8.0);
+    assert_eq!(three_halves.unwrap().deref().output, 8.0);
     assert_eq!(three_halves.unwrap().num_evaluations, 1);
 
     three_halves.re_eval(ThreeHalvesPower(9.0));
-    assert_eq!(three_halves.unwrap().deref().output as f64, 27.0);
+    assert_eq!(three_halves.unwrap().deref().output, 27.0);
     assert_eq!(three_halves.unwrap().num_evaluations, 2);
 
     three_halves.re_eval(ThreeHalvesPower(-4.0));
     assert!(three_halves.is_none());
 
     three_halves.re_eval(ThreeHalvesPower(9.0));
-    assert_eq!(three_halves.unwrap().deref().output as f64, 27.0);
+    assert_eq!(three_halves.unwrap().deref().output, 27.0);
 }
