@@ -1,4 +1,5 @@
 mod tuple;
+mod foreign;
 
 use std::ops::Deref;
 use std::cmp::Ordering;
@@ -60,6 +61,7 @@ pub trait ShallowEval {
 
 /// A wrapper type for testing and debugging evaluation strategies, which increments a counter
 /// every time it is evaluated.
+#[derive(Clone, Copy, Debug)]
 pub struct CountEvaluations<T> {
     pub num_evaluations: u32,
     pub content: T,
