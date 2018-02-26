@@ -487,6 +487,7 @@ impl<
 /// ```
 /// use incremental::{Inc, ShallowEval, Raw, ConvertSource, Compose};
 ///
+/// #[derive(Clone, PartialEq)]
 /// struct SquareOp(i32);
 ///
 /// impl ShallowEval for SquareOp {
@@ -517,6 +518,57 @@ impl<
 ///
 /// fourth_power.re_eval(3);
 /// assert_eq!(fourth_power.output, 81);
+/// ```
+///
+/// Caching using intermediate results:
+///
+/// ```
+/// #   use incremental::{Inc, ShallowEval, Raw, ConvertSource, Compose};
+/// #
+/// #   #[derive(Clone, PartialEq)]
+/// #   struct SquareOp(i32);
+/// #
+/// #   impl ShallowEval for SquareOp {
+/// #       type Output = i32;
+/// #
+/// #       fn shallow_eval(self) -> Self::Output {
+/// #           let SquareOp(x) = self;
+/// #           x * x
+/// #       }
+/// #   }
+/// #
+/// #   type Squared = ConvertSource<SquareOp, Raw<i32>>;
+/// #
+/// #   impl<'a> From<i32> for SquareOp {
+/// #       fn from(i: i32) -> Self {
+/// #           SquareOp(i)
+/// #       }
+/// #   }
+/// #
+/// #   impl<'a> From<&'a Squared> for SquareOp {
+/// #       fn from(i: &'a Squared) -> Self {
+/// #           SquareOp(i.output)
+/// #       }
+/// #   }
+/// use incremental::{Cache, CountEvaluations};
+///
+/// type CachedSquare = ConvertSource<SquareOp, Cache<SquareOp, CountEvaluations<Squared>>>;
+///
+/// impl<'a> From<&'a CachedSquare> for SquareOp {
+///     fn from(i: &'a CachedSquare) -> Self {
+///         SquareOp(i.output)
+///     }
+/// }
+///
+/// let mut fourth_power: Compose<CachedSquare, CachedSquare> = Inc::fresh_eval(2);
+/// assert_eq!(fourth_power.output, 16);
+/// assert_eq!(fourth_power.pre.num_evaluations, 1);
+/// assert_eq!(fourth_power.post.num_evaluations, 1);
+///
+/// fourth_power.re_eval(-2);
+/// assert_eq!(fourth_power.output, 16);
+/// assert_eq!(fourth_power.pre.num_evaluations, 2); // intermediate result recomputed
+/// assert_eq!(fourth_power.post.num_evaluations, 1); // final result not recomputed
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Compose<Pre, Post> {
